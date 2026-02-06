@@ -205,8 +205,7 @@ function MonthlyComparator() {
     const [protheusFile, setProtheusFile] = useState(null);
     const [arcaFile, setArcaFile] = useState(null);
     const [stats, setStats] = useState(null);
-    const [generatedCsv, setGeneratedCsv] = useState(null);
-    const [generatedDiffCsv, setGeneratedDiffCsv] = useState(null);
+    const [reportData, setReportData] = useState(null);
     const [error, setError] = useState(null);
     const [isProcessing, setIsProcessing] = useState(false);
 
@@ -227,6 +226,7 @@ function MonthlyComparator() {
         }
         setError(null);
         setStats(null);
+        setReportData(null);
     };
 
     const normalizeDate = (dateStr) => {
@@ -278,29 +278,17 @@ function MonthlyComparator() {
             const afipText = await readFile(arcaFile);
             const afipLines = afipText.split(/\r\n|\n/);
             const afipMap = new Map();
-            let afipTotal = 0;
+            let afipTotalRecs = 0;
             let afipFiltered = 0;
 
-            // Headers usually in line 0
             const afipHeaders = afipLines[0].split(';');
-            // Mapping simplistic based on known indices or name
-            // Assuming standard format as per user script: 
-            // 0:Fecha, 1:Tipo, 2:PtoVta, 3:Num, 7:DocEmisor, 8:Denom, ... 14:Total, 11:IVA (variable)
-            // Lets stick to column index logic from script for reliability if headers match
 
             for (let i = 1; i < afipLines.length; i++) {
                 const line = afipLines[i].trim();
                 if (!line) continue;
-                afipTotal++;
+                afipTotalRecs++;
 
-                // Parse CSV correctly handling quotes is hard manually, but we try basic split for now
-                // or use a regex for semi-colon split.
                 const cols = line.split(';');
-
-                // Using CSV Header names from script logic:
-                // We need indices. Let's try to map dynamically or hardcode based on user script
-                // Script uses: 'Fecha de Emisión', 'Nro. Doc. Emisor', 'Punto de Venta', 'Número Desde', 'Imp. Total', 'Total IVA'
-                // This implies we should find indices.
 
                 const getCol = (name) => {
                     const idx = afipHeaders.findIndex(h => h.includes(name));
@@ -311,19 +299,20 @@ function MonthlyComparator() {
                 if (!isDateInPeriod(fecha)) continue;
                 afipFiltered++;
 
+                // ID: CUIT + PTO + NUM
                 const cuit = (getCol('Nro. Doc') || '').replace(/\./g, '');
                 const ptoVta = (getCol('Punto de Venta') || '').padStart(4, '0');
                 const numero = (getCol('Número Desde') || '').padStart(8, '0');
                 const uniqueId = `${cuit}${ptoVta}${numero}`;
 
                 const total = parseAfipNumber(getCol('Imp. Total'));
-                const iva = parseAfipNumber(getCol('Total IVA')); // Might need adjustment if header differs
+                const iva = parseAfipNumber(getCol('Total IVA'));
 
                 afipMap.set(uniqueId, {
                     fecha,
                     emisor: getCol('Denominación') || '',
                     iva,
-                    total,
+                    total, // AFIP already positive
                     cuit,
                     uniqueId
                 });
@@ -335,41 +324,9 @@ function MonthlyComparator() {
             const xmlDoc = parser.parseFromString(protheusText, "text/xml");
             const rows = xmlDoc.getElementsByTagName("Row");
 
-            let protTotal = 0;
             let protFiltered = 0;
             const comparisonList = [];
 
-            // Skip headers (approx first 1-2 rows)
-            // We iterate all and check for data
-            for (let i = 0; i < rows.length; i++) {
-                const cells = rows[i].getElementsByTagName("Cell");
-                let rowData = {};
-                let hasData = false;
-
-                // Extract data efficiently
-                for (let j = 0; j < cells.length; j++) {
-                    const indexAttr = cells[j].getAttribute("ss:Index");
-                    const index = indexAttr ? parseInt(indexAttr) - 1 : j; // 0-based for array logic
-                    const dataNode = cells[j].getElementsByTagName("Data")[0];
-                    if (dataNode) {
-                        const val = dataNode.textContent.trim();
-                        // Map based on expected columns from script
-                        // Script: Headers found dynamically. Here let's guess standard layout or use fixed index?
-                        // Script mapped headers. Let's assume standard layout.
-                        // based on previous IvaComparator:
-                        // 2: Denominacion, 4: CUIT, 6: Fecha, 9: Numero, 11: Total
-                        // Let's add IVA. Assuming it is around Total.
-                        // We will check header row first? simpler to hardcode if file format is stable.
-                        // User script: 'CODIGO', 'DENOMINACION', 'Nº DOCUMENTO', 'FECHA', 'NUMERO', 'TOTAL', 'IVA'
-
-                        // Let's rely on column names if possible.
-                        // Implementing simple column finder:
-                        if (val === 'FECHA') { /* Header row detected */ }
-                    }
-                }
-            }
-
-            // RE-STRATEGY for XML:
             // Convert XML to Array of Objects first
             const cleanRows = [];
             let headers = [];
@@ -392,7 +349,7 @@ function MonthlyComparator() {
                 cleanRows.push(rowVals);
             }
 
-            // Find header
+            // Find header with correct columns
             for (let i = 0; i < cleanRows.length; i++) {
                 if (cleanRows[i].includes('Nº DOCUMENTO') || cleanRows[i].includes('DENOMINACION')) {
                     headers = cleanRows[i];
@@ -401,9 +358,9 @@ function MonthlyComparator() {
                 }
             }
 
-            if (headerIndex === -1) throw new Error("No se encontró cabecera en Protheus XML");
+            if (headerIndex === -1) throw new Error("No se encontró cabecera en Protheus XML (buscando Nº DOCUMENTO o DENOMINACION)");
 
-            // Parse Data
+            // Parse And Cross Reference
             for (let i = headerIndex + 1; i < cleanRows.length; i++) {
                 const r = cleanRows[i];
                 if (r.length === 0) continue;
@@ -414,97 +371,92 @@ function MonthlyComparator() {
                 };
 
                 const fechaProbable = getVal('FECHA');
-                // Try to find correct 'FECHA' column if multiple
-                // Actually relying on exact name from XML file is safer.
-
-                // Check if it is a data row
                 if (!fechaProbable) continue;
-                protTotal++;
 
                 if (!isDateInPeriod(fechaProbable)) continue;
                 protFiltered++;
 
                 const cuit = getVal('Nº DOCUMENTO').replace(/-/g, '').trim();
                 const numero = getVal('NUMERO').trim(); // Ensure we get the number
-                const uniqueId = `${cuit}${numero}`;
-                const total = parseFloat(getVal('TOTAL')) || 0;
-                const iva = parseFloat(getVal('IVA')) || 0; // Check if 'IVA' column exists in your XML!
+                const uniqueId = `${cuit}${numero}`; // Protheus ID: CUIT + NUMERO (Assuming NUMERO includes PTOVTA logic in Protheus extract or we match roughly)
+
+                // CORRECCIÓN DE SIGNO: Usamos Math.abs() para ignorar el negativo de Protheus
+                const totalProt = Math.abs(parseFloat(getVal('TOTAL')) || 0.0);
+                const ivaProt = Math.abs(parseFloat(getVal('IVA')) || 0.0);
                 const den = getVal('DENOMINACION');
 
-                // Match
-                let estado = 'SOLO EN PROTHEUS';
+                let estadoCruce = 'SOLO PROTHEUS';
+                let validacionMontos = '-';
                 let afipData = { total: 0, iva: 0, fecha: '', emisor: '' };
 
                 if (afipMap.has(uniqueId)) {
-                    estado = 'UNIDO';
+                    estadoCruce = 'AMBOS';
                     afipData = afipMap.get(uniqueId);
                     afipMap.delete(uniqueId);
                 }
 
+                const difTotal = Number((totalProt - afipData.total).toFixed(2));
+                const difIva = Number((ivaProt - afipData.iva).toFixed(2));
+
+                if (estadoCruce === 'AMBOS') {
+                    const esDiferenciaReal = Math.abs(difTotal) > 0.05 || Math.abs(difIva) > 0.05;
+                    validacionMontos = esDiferenciaReal ? 'DIFERENCIA' : 'OK';
+                }
+
                 comparisonList.push({
                     id: uniqueId,
-                    estado,
-                    emisor: den || afipData.emisor,
+                    estado_cruce: estadoCruce,
+                    validacion_montos: validacionMontos,
                     cuit,
+                    emisor: den || afipData.emisor,
                     fecha_prot: fechaProbable,
                     fecha_afip: afipData.fecha,
-                    iva_prot: iva,
+                    iva_prot: ivaProt,
                     iva_afip: afipData.iva,
-                    total_prot: total,
+                    total_prot: totalProt,
                     total_afip: afipData.total,
-                    dif_iva: iva - afipData.iva,
-                    dif_total: total - afipData.total
+                    dif_iva: difIva,
+                    dif_total: difTotal
                 });
             }
 
-            // Add remaining AFIP
-            afipMap.forEach((val, key) => {
+            // 4. AGREGAR RESTO DE AFIP (SOLO AFIP)
+            afipMap.forEach((afipData, id) => {
                 comparisonList.push({
-                    id: key,
-                    estado: 'SOLO EN AFIP',
-                    emisor: val.emisor,
-                    cuit: val.cuit,
+                    id,
+                    estado_cruce: 'SOLO AFIP',
+                    validacion_montos: '-',
+                    cuit: afipData.cuit,
+                    emisor: afipData.emisor,
                     fecha_prot: '',
-                    fecha_afip: val.fecha,
+                    fecha_afip: afipData.fecha,
                     iva_prot: 0,
-                    iva_afip: val.iva,
+                    iva_afip: afipData.iva,
                     total_prot: 0,
-                    total_afip: val.total,
-                    dif_iva: 0 - val.iva,
-                    dif_total: 0 - val.total
+                    total_afip: afipData.total,
+                    dif_iva: 0 - afipData.iva,
+                    dif_total: 0 - afipData.total
                 });
             });
 
-            // Generate CSV Content
-            const csvHeader = 'ID;ESTADO;CUIT;EMISOR;FECHA_PROTHEUS;FECHA_AFIP;IVA_PROT;IVA_AFIP;DIF_IVA;TOTAL_PROT;TOTAL_AFIP;DIF_TOTAL';
-            const csvRows = [csvHeader];
-            const diffRows = [csvHeader];
-            let diffCount = 0;
+            // Generate CSVs
+            const diferencias = comparisonList.filter(d => d.estado_cruce !== 'AMBOS' || d.validacion_montos === 'DIFERENCIA');
+            const soloAfip = comparisonList.filter(d => d.estado_cruce === 'SOLO AFIP');
+            const soloProtheus = comparisonList.filter(d => d.estado_cruce === 'SOLO PROTHEUS');
 
-            comparisonList.forEach(item => {
-                const formatNum = (n) => n.toFixed(2).replace('.', ',');
-                const line = [
-                    item.id, item.estado, item.cuit, `"${item.emisor}"`,
-                    item.fecha_prot, item.fecha_afip,
-                    formatNum(item.iva_prot), formatNum(item.iva_afip), formatNum(item.dif_iva),
-                    formatNum(item.total_prot), formatNum(item.total_afip), formatNum(item.dif_total)
-                ].join(';');
-
-                csvRows.push(line);
-                if (item.estado !== 'UNIDO' || Math.abs(item.dif_iva) > 0.05 || Math.abs(item.dif_total) > 0.05) {
-                    diffRows.push(line);
-                    diffCount++;
-                }
+            setReportData({
+                all: comparisonList,
+                diffs: diferencias,
+                soloAfip: soloAfip,
+                soloProtheus: soloProtheus
             });
 
-            setGeneratedCsv(csvRows.join('\n'));
-            setGeneratedDiffCsv(diffRows.join('\n'));
             setStats({
                 total: comparisonList.length,
-                diffs: diffCount,
-                matched: comparisonList.length - diffCount,
-                afipCount: afipFiltered,
-                protCount: protFiltered
+                diffs: diferencias.length,
+                matched: comparisonList.length - diferencias.length,
+                soloAfipCount: soloAfip.length,
+                soloProtheusCount: soloProtheus.length
             });
 
         } catch (err) {
@@ -515,15 +467,44 @@ function MonthlyComparator() {
         }
     };
 
-    const downloadCsv = (content, name) => {
-        const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.setAttribute("download", name);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+    const downloadExcelReport = () => {
+        if (!reportData) return;
+
+        const wb = XLSX.utils.book_new();
+
+        const createSheet = (name, arr) => {
+            // Formatear datos para exportación limpia
+            const formatted = arr.map(i => ({
+                ID: i.id,
+                Estado: i.estado_cruce,
+                Validacion: i.validacion_montos,
+                CUIT: i.cuit,
+                Emisor: i.emisor,
+                Fecha_Prot: i.fecha_prot,
+                Fecha_AFIP: i.fecha_afip,
+                IVA_Prot: i.iva_prot,
+                IVA_AFIP: i.iva_afip,
+                Dif_IVA: i.dif_iva,
+                Total_Prot: i.total_prot,
+                Total_AFIP: i.total_afip,
+                Dif_Total: i.dif_total
+            }));
+            const ws = XLSX.utils.json_to_sheet(formatted);
+            // Ancho de columnas sugerido
+            ws['!cols'] = [
+                { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 30 },
+                { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
+                { wch: 10 }, { wch: 10 }, { wch: 10 }
+            ];
+            XLSX.utils.book_append_sheet(wb, ws, name);
+        };
+
+        createSheet("General", reportData.all);
+        createSheet("Diferencias", reportData.diffs);
+        createSheet("Solo AFIP", reportData.soloAfip);
+        createSheet("Solo Protheus", reportData.soloProtheus);
+
+        XLSX.writeFile(wb, `Reporte_Comparativo_${mesFiltro}_${anioFiltro}.xlsx`);
     };
 
     return (
@@ -570,31 +551,30 @@ function MonthlyComparator() {
 
             {stats && (
                 <div className="mt-8 animate-fade-in-up space-y-6">
-                    <div className="grid grid-cols-3 gap-4">
+                    <div className="grid grid-cols-4 gap-4">
                         <div className="bg-slate-700/30 p-4 rounded-xl border border-slate-600 text-center">
-                            <div className="text-slate-400 text-sm">Registros Protheus</div>
-                            <div className="text-2xl font-bold text-white">{stats.protCount}</div>
+                            <div className="text-slate-400 text-sm">Total Procesado</div>
+                            <div className="text-2xl font-bold text-white">{stats.total}</div>
                         </div>
                         <div className="bg-slate-700/30 p-4 rounded-xl border border-slate-600 text-center">
-                            <div className="text-slate-400 text-sm">Registros Arca</div>
-                            <div className="text-2xl font-bold text-white">{stats.afipCount}</div>
+                            <div className="text-slate-400 text-sm">Ok / Coinciden</div>
+                            <div className="text-2xl font-bold text-green-400">{stats.matched}</div>
                         </div>
                         <div className="bg-slate-700/30 p-4 rounded-xl border border-slate-600 text-center">
                             <div className="text-slate-400 text-sm">Discrepancias</div>
                             <div className="text-2xl font-bold text-red-400">{stats.diffs}</div>
                         </div>
+                        <div className="bg-slate-700/30 p-4 rounded-xl border border-slate-600 text-center flex flex-col justify-center">
+                            <div className="text-xs text-yellow-500">Solo AFIP: {stats.soloAfipCount}</div>
+                            <div className="text-xs text-blue-400">Solo PROT: {stats.soloProtheusCount}</div>
+                        </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <button
-                            onClick={() => downloadCsv(generatedCsv, `Comparativo_${mesFiltro}_${anioFiltro}.csv`)}
-                            className="p-4 bg-green-600/20 text-green-400 border border-green-500/30 rounded-xl hover:bg-green-600/30 transition-all flex items-center justify-center gap-2 font-semibold">
-                            <Download size={20} /> Descargar Reporte Completo
-                        </button>
-                        <button
-                            onClick={() => downloadCsv(generatedDiffCsv, `Diferencias_${mesFiltro}_${anioFiltro}.csv`)}
-                            className="p-4 bg-red-600/20 text-red-400 border border-red-500/30 rounded-xl hover:bg-red-600/30 transition-all flex items-center justify-center gap-2 font-semibold">
-                            <AlertCircle size={20} /> Descargar Solo Diferencias
+                            onClick={downloadExcelReport}
+                            className="col-span-1 sm:col-span-2 p-4 bg-green-600 hover:bg-green-500 text-white rounded-xl shadow-lg hover:shadow-green-500/20 transition-all flex items-center justify-center gap-3 font-bold text-lg">
+                            <FileText size={24} /> Descargar Reporte Excel Completo (.xlsx)
                         </button>
                     </div>
                 </div>

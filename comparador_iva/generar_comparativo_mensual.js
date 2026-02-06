@@ -16,6 +16,8 @@ const FILE_PROTHEUS = 'matrar2b.xml';
 
 const FILE_OUTPUT_GENERAL = 'Comparativo_Noviembre_2025.csv';
 const FILE_OUTPUT_DIFERENCIAS = 'Facturas_Sin_Cruce_Noviembre.csv';
+const FILE_OUTPUT_SOLO_AFIP = 'Solo_AFIP_Noviembre.csv';
+const FILE_OUTPUT_SOLO_PROTHEUS = 'Solo_Protheus_Noviembre.csv';
 
 // --- FILTRO POR DEFECTO ---
 const MES_FILTRO = 11;
@@ -29,8 +31,10 @@ async function generarReporte(mesFiltro, anioFiltro) {
     console.log(`--- Procesando: Mes ${mesFiltro} / Año ${anioFiltro} ---`);
 
     // Helper: Validar fecha
-    const esFechaDelPeriodo = (fechaStr) => {
-        if (!fechaStr) return false;
+    const esFechaDelPeriodo = (fechaRaw) => {
+        if (!fechaRaw) return false;
+        const fechaStr = String(fechaRaw);
+
         let mes, anio;
         if (fechaStr.includes('-')) { // AFIP YYYY-MM-DD
             const p = fechaStr.split('-');
@@ -39,6 +43,7 @@ async function generarReporte(mesFiltro, anioFiltro) {
             const p = fechaStr.split('/');
             mes = parseInt(p[1]); anio = parseInt(p[2]);
         } else return false;
+
         return mes === mesFiltro && anio === anioFiltro;
     };
 
@@ -81,30 +86,31 @@ async function generarReporte(mesFiltro, anioFiltro) {
         const ivaProt = Math.abs(parseFloat(prot['IVA']) || 0.0);
 
         const afipMatch = afipMap.get(id);
-        let estado = 'SOLO EN PROTHEUS';
+
+        let estadoCruce = 'SOLO PROTHEUS';
+        let validacionMontos = '-';
         let afipData = { total: 0, iva: 0, fecha: '', emisor: '' };
 
         if (afipMatch) {
-            estado = 'UNIDO';
+            estadoCruce = 'AMBOS';
             afipData = afipMatch;
             afipMap.delete(id);
         }
 
-        // Calculamos diferencia (ahora ambos son positivos)
-        // Redondeamos a 2 decimales para evitar errores de coma flotante (0.00000001)
+        // Calculamos diferencia
         const difTotal = Number((totalProt - afipData.total).toFixed(2));
         const difIva = Number((ivaProt - afipData.iva).toFixed(2));
 
-        // Si la diferencia es minúscula (menor a 1 peso), asumimos que es 0
-        const esDiferenciaReal = Math.abs(difTotal) > 0.05 || Math.abs(difIva) > 0.05;
-
-        // Si están unidos pero hay diferencia real, cambiamos el estado para alertar
-        if (estado === 'UNIDO' && esDiferenciaReal) {
-            estado = 'DIFERENCIA IMPORTE';
+        // Validación de montos solo si hay cruce
+        if (estadoCruce === 'AMBOS') {
+            const esDiferenciaReal = Math.abs(difTotal) > 0.05 || Math.abs(difIva) > 0.05;
+            validacionMontos = esDiferenciaReal ? 'DIFERENCIA' : 'OK';
         }
 
         comparisonMap.set(id, {
-            id, estado,
+            id,
+            estado_cruce: estadoCruce,
+            validacion_montos: validacionMontos,
             cuit: cuit,
             emisor: prot['DENOMINACION'] || afipData.emisor,
             fecha_prot: prot['FECHA'],
@@ -121,7 +127,9 @@ async function generarReporte(mesFiltro, anioFiltro) {
     // 4. AGREGAR RESTO DE AFIP
     afipMap.forEach((afipData, id) => {
         comparisonMap.set(id, {
-            id, estado: 'SOLO EN AFIP',
+            id,
+            estado_cruce: 'SOLO AFIP',
+            validacion_montos: '-',
             cuit: afipData.cuit, emisor: afipData.emisor,
             fecha_prot: '', fecha_afip: afipData.fecha,
             iva_prot: 0, iva_afip: afipData.iva,
@@ -145,61 +153,134 @@ async function parseProtheusXML(filePath) {
     const xmlContent = fs.readFileSync(filePath, 'utf-8');
     const parser = new xml2js.Parser();
     const res = await parser.parseStringPromise(xmlContent);
-    const rows = res['Workbook']['Worksheet'][0]['Table'][0]['Row'];
 
-    // Buscar cabecera
+    // Buscar en todas las hojas de trabajo
+    const sheets = res['Workbook']['Worksheet'] || [];
+    let targetRows = null;
     let headIdx = -1, headers = [];
-    const matrix = rows.map(r => {
-        if (!r['Cell']) return [];
-        let rowData = [];
-        r['Cell'].forEach(c => {
-            let idx = c['$'] && c['$']['ss:Index'] ? parseInt(c['$']['ss:Index']) - 1 : rowData.length;
-            while (rowData.length < idx) rowData.push('');
-            let val = '';
-            if (c['Data']) val = c['Data'][0]['_'] || c['Data'][0];
-            rowData.push(val);
+
+    for (const sheet of sheets) {
+        if (!sheet['Table'] || !sheet['Table'][0]['Row']) continue;
+        const rows = sheet['Table'][0]['Row'];
+
+        // Convertir filas a matriz para buscar cabecera
+        const matrix = rows.map(r => {
+            if (!r['Cell']) return [];
+            let rowData = [];
+            r['Cell'].forEach(c => {
+                let idx = c['$'] && c['$']['ss:Index'] ? parseInt(c['$']['ss:Index']) - 1 : rowData.length;
+                while (rowData.length < idx) rowData.push('');
+                let val = '';
+                if (c['Data']) val = c['Data'][0]['_'] || c['Data'][0];
+                rowData.push(val);
+            });
+            return rowData;
         });
-        return rowData;
-    });
 
-    for (let i = 0; i < matrix.length; i++) {
-        if (matrix[i].includes('CODIGO') && matrix[i].includes('DENOMINACION')) {
-            headIdx = i; headers = matrix[i]; break;
+        // Buscar cabecera en esta hoja
+        for (let i = 0; i < matrix.length; i++) {
+            if (matrix[i].includes('CODIGO') && matrix[i].includes('DENOMINACION')) {
+                headIdx = i;
+                headers = matrix[i];
+                targetRows = matrix; // Encontramos la hoja correcta
+                break;
+            }
         }
-    }
-    if (headIdx === -1) throw new Error("No hay cabecera en XML");
 
-    return matrix.slice(headIdx + 1).map(row => {
+        if (targetRows) break; // Terminar si encontramos
+    }
+
+    if (!targetRows) throw new Error("No se encontró la hoja con 'CODIGO' y 'DENOMINACION' en el XML");
+
+    return targetRows.slice(headIdx + 1).map(row => {
         let obj = {};
         headers.forEach((h, i) => obj[h] = row[i] || '');
         return obj;
     });
 }
 
-// Ejecución directa (Genera CSVs)
-async function main() {
-    const data = await generarReporte(MES_FILTRO, ANIO_FILTRO);
+const XLSX = require('xlsx');
 
-    // Filtrar solo las diferencias reales para el archivo de errores
-    const diferencias = data.filter(d => d.estado !== 'UNIDO');
+// --- CONFIGURACIÓN DE SALIDA ---
+const FILE_OUTPUT_EXCEL = `Reporte_Comparativo_${MES_FILTRO}_${ANIO_FILTRO}.xlsx`;
 
-    const toCSV = (arr) => {
-        if (!arr.length) return '';
-        const head = ['ID', 'ESTADO', 'CUIT', 'EMISOR', 'FECHA_PROTHEUS', 'FECHA_AFIP', 'IVA_PROT', 'IVA_AFIP', 'DIF_IVA', 'TOTAL_PROT', 'TOTAL_AFIP', 'DIF_TOTAL'];
-        const rows = arr.map(i => [
-            i.id, i.estado, i.cuit, `"${i.emisor}"`,
-            i.fecha_prot, i.fecha_afip,
-            i.iva_prot.toFixed(2).replace('.', ','), i.iva_afip.toFixed(2).replace('.', ','), i.dif_iva.toFixed(2).replace('.', ','),
-            i.total_prot.toFixed(2).replace('.', ','), i.total_afip.toFixed(2).replace('.', ','), i.dif_total.toFixed(2).replace('.', ',')
-        ].join(';'));
-        return [head.join(';'), ...rows].join('\n');
+// ... (rest of the file remains, upgrading main function)
+
+// Función para exportar a Excel
+function exportToExcel(data, diferencias, soloAfip, soloProtheus) {
+    const wb = XLSX.utils.book_new();
+
+    // Helper para crear hoja
+    const createSheet = (name, arrData) => {
+        if (!arrData.length) return;
+        const ws = XLSX.utils.json_to_sheet(arrData.map(i => ({
+            ID: i.id,
+            Estado: i.estado_cruce,
+            Validacion: i.validacion_montos,
+            CUIT: i.cuit,
+            Emisor: i.emisor,
+            Fecha_Prot: i.fecha_prot,
+            Fecha_AFIP: i.fecha_afip,
+            IVA_Prot: i.iva_prot,
+            IVA_AFIP: i.iva_afip,
+            Dif_IVA: i.dif_iva,
+            Total_Prot: i.total_prot,
+            Total_AFIP: i.total_afip,
+            Dif_Total: i.dif_total
+        })));
+
+        // Ajustar ancho de columnas básico
+        const wscols = [
+            { wch: 20 }, // ID
+            { wch: 15 }, // Estado
+            { wch: 15 }, // Validacion
+            { wch: 15 }, // CUIT
+            { wch: 30 }, // Emisor
+            { wch: 12 }, // Fecha P
+            { wch: 12 }, // Fecha A
+            { wch: 10 }, // IVA P
+            { wch: 10 }, // IVA A
+            { wch: 10 }, // Dif IVA
+            { wch: 10 }, // Total P
+            { wch: 10 }, // Total A
+            { wch: 10 }  // Dif Total
+        ];
+        ws['!cols'] = wscols;
+
+        XLSX.utils.book_append_sheet(wb, ws, name);
     };
 
-    fs.writeFileSync(FILE_OUTPUT_GENERAL, toCSV(data));
-    fs.writeFileSync(FILE_OUTPUT_DIFERENCIAS, toCSV(diferencias));
+    createSheet("General", data);
+    createSheet("Diferencias", diferencias);
+    createSheet("Solo AFIP", soloAfip);
+    createSheet("Solo Protheus", soloProtheus);
 
-    console.log(`\n LISTO: ${data.length} total. ${diferencias.length} diferencias.`);
-    console.log(` Archivos: ${FILE_OUTPUT_GENERAL} y ${FILE_OUTPUT_DIFERENCIAS}`);
+    XLSX.writeFile(wb, FILE_OUTPUT_EXCEL);
+    console.log(`\n Archivo Excel generado: ${FILE_OUTPUT_EXCEL}`);
+}
+
+// Ejecución directa
+async function main() {
+    try {
+        const data = await generarReporte(MES_FILTRO, ANIO_FILTRO);
+
+        // Filtrar subconjuntos
+        const diferencias = data.filter(d => d.estado_cruce !== 'AMBOS' || d.validacion_montos === 'DIFERENCIA');
+        const soloAfip = data.filter(d => d.estado_cruce === 'SOLO AFIP');
+        const soloProtheus = data.filter(d => d.estado_cruce === 'SOLO PROTHEUS');
+
+        console.log("Generando reporte Excel...");
+        exportToExcel(data, diferencias, soloAfip, soloProtheus);
+
+        console.log(`\n Resumen:`);
+        console.log(` - Total registros: ${data.length}`);
+        console.log(` - Diferencias: ${diferencias.length}`);
+        console.log(` - Solo AFIP: ${soloAfip.length}`);
+        console.log(` - Solo Protheus: ${soloProtheus.length}`);
+
+    } catch (error) {
+        console.error("ERROR FATAL:", error.message);
+    }
 }
 
 module.exports = { generarReporte };
