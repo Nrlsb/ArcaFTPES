@@ -1,333 +1,206 @@
 /**
  * Nombre del archivo: generar_comparativo_mensual.js
- * Descripción: Script para conciliar archivos de IVA entre Sistema ERP (Protheus XML) y AFIP (CSV).
- * Incluye filtrado por mes/año y generación de reporte de discrepancias.
- * Autor: Generado por Gemini para el Usuario.
- * * Requisitos:
- * - Node.js instalado
- * - Dependencias: npm install csv-parse xml2js
- * * Uso:
- * node generar_comparativo_mensual.js
+ * Descripción: Script CORREGIDO para conciliar archivos de IVA.
+ * CORRECCIONES:
+ * 1. Convierte los importes de Protheus a positivo (valor absoluto).
+ * 2. Filtra correctamente el archivo de Diferencias.
  */
 
 const fs = require('fs');
-const path = require('path');
 const { parse } = require('csv-parse/sync');
 const xml2js = require('xml2js');
 
-// --- CONFIGURACIÓN DE ARCHIVOS Y FILTROS ---
+// --- CONFIGURACIÓN ---
 const FILE_AFIP = '11 - AFIP IVA Noviembre 2025.csv';
 const FILE_PROTHEUS = 'matrar2b.xml';
 
 const FILE_OUTPUT_GENERAL = 'Comparativo_Noviembre_2025.csv';
 const FILE_OUTPUT_DIFERENCIAS = 'Facturas_Sin_Cruce_Noviembre.csv';
 
-// --- OPCIÓN PARA ELEGIR EL MES ---
-// Cambia estos valores para analizar otro período
-const MES_FILTRO = 11;   // Noviembre
+// --- FILTRO POR DEFECTO ---
+const MES_FILTRO = 11;
 const ANIO_FILTRO = 2025;
 
 /**
- * Función Principal de Lógica de Negocio
- * @param {number} mesFiltro - Mes a filtrar (1-12)
- * @param {number} anioFiltro - Año a filtrar (ej. 2025)
+ * Función Principal
  */
 async function generarReporte(mesFiltro, anioFiltro) {
-    if (!mesFiltro || !anioFiltro) throw new Error("Mes y Año son requeridos");
+    if (!mesFiltro || !anioFiltro) throw new Error("Mes y Año requeridos");
+    console.log(`--- Procesando: Mes ${mesFiltro} / Año ${anioFiltro} ---`);
 
-    console.log(`--- Iniciando Conciliación para el período: ${mesFiltro}/${anioFiltro} ---`);
-
-    // Helper interno para validar fecha
+    // Helper: Validar fecha
     const esFechaDelPeriodo = (fechaStr) => {
         if (!fechaStr) return false;
         let mes, anio;
-        if (fechaStr.includes('-')) {
-            const partes = fechaStr.split('-');
-            anio = parseInt(partes[0]);
-            mes = parseInt(partes[1]);
-        } else if (fechaStr.includes('/')) {
-            const partes = fechaStr.split('/');
-            mes = parseInt(partes[1]);
-            anio = parseInt(partes[2]);
-        } else {
-            return false;
-        }
+        if (fechaStr.includes('-')) { // AFIP YYYY-MM-DD
+            const p = fechaStr.split('-');
+            anio = parseInt(p[0]); mes = parseInt(p[1]);
+        } else if (fechaStr.includes('/')) { // Prot DD/MM/YYYY
+            const p = fechaStr.split('/');
+            mes = parseInt(p[1]); anio = parseInt(p[2]);
+        } else return false;
         return mes === mesFiltro && anio === anioFiltro;
     };
 
-    // 1. PROCESAR AFIP
-    console.log(`Leyendo AFIP: ${FILE_AFIP}...`);
+    // 1. LEER AFIP
     const afipRaw = fs.readFileSync(FILE_AFIP, 'utf-8');
-
-    const afipRecords = parse(afipRaw, {
-        delimiter: ';',
-        columns: true,
-        skip_empty_lines: true,
-        relax_quotes: true
-    });
+    const afipRecords = parse(afipRaw, { delimiter: ';', columns: true, relax_quotes: true });
 
     const afipMap = new Map();
-    let afipTotalCount = 0;
-    let afipFilteredCount = 0;
+    afipRecords.forEach(rec => {
+        if (!esFechaDelPeriodo(rec['Fecha de Emisión'])) return;
 
-    afipRecords.forEach(record => {
-        afipTotalCount++;
-        // FILTRO DE FECHA
-        if (!esFechaDelPeriodo(record['Fecha de Emisión'])) {
-            return;
-        }
+        // Clave: CUIT + PTO + NUM
+        const id = rec['Nro. Doc. Emisor'].replace(/\./g, '') +
+            rec['Punto de Venta'].padStart(4, '0') +
+            rec['Número Desde'].padStart(8, '0');
 
-        const cuit = record['Nro. Doc. Emisor'].replace(/\./g, '');
-        const ptoVta = record['Punto de Venta'].padStart(4, '0');
-        const numero = record['Número Desde'].padStart(8, '0');
-        const uniqueId = `${cuit}${ptoVta}${numero}`;
-
-        afipMap.set(uniqueId, {
-            fecha: record['Fecha de Emisión'],
-            emisor: record['Denominación Emisor'],
-            iva: parseAfipNumber(record['Total IVA']),
-            total: parseAfipNumber(record['Imp. Total']),
-            cuit: cuit,
-            raw: record
+        afipMap.set(id, {
+            fecha: rec['Fecha de Emisión'],
+            emisor: rec['Denominación Emisor'],
+            iva: parseNum(rec['Total IVA']),
+            total: parseNum(rec['Imp. Total']), // AFIP ya es positivo
+            cuit: rec['Nro. Doc. Emisor'].replace(/\./g, '')
         });
-        afipFilteredCount++;
     });
-    console.log(`Registros AFIP leídos: ${afipTotalCount}. Filtrados por mes: ${afipFilteredCount}`);
 
-    // 2. PROCESAR PROTHEUS
-    console.log(`Leyendo Protheus XML: ${FILE_PROTHEUS}...`);
-    const protheusRecordsRaw = await parseProtheusXML(FILE_PROTHEUS);
-
+    // 2. LEER PROTHEUS
+    const protheusRecords = await parseProtheusXML(FILE_PROTHEUS);
     const comparisonMap = new Map();
-    let protTotalCount = 0;
-    let protFilteredCount = 0;
 
-    // 3. CRUCE: Primero iteramos Protheus
-    protheusRecordsRaw.forEach(prot => {
-        protTotalCount++;
-        if (!esFechaDelPeriodo(prot['FECHA'])) {
-            return;
-        }
-        protFilteredCount++;
+    // 3. CRUCE
+    protheusRecords.forEach(prot => {
+        if (!esFechaDelPeriodo(prot['FECHA'])) return;
 
-        const cuitRaw = prot['Nº DOCUMENTO'] || '';
-        const cuit = cuitRaw.replace(/-/g, '').trim();
-        const numero = (prot['NUMERO'] || '').trim();
-        const uniqueId = `${cuit}${numero}`;
+        const cuit = (prot['Nº DOCUMENTO'] || '').replace(/-/g, '').trim();
+        const num = (prot['NUMERO'] || '').trim();
+        const id = cuit + num;
 
-        const totalProt = parseFloat(prot['TOTAL']) || 0.0;
-        const ivaProt = parseFloat(prot['IVA']) || 0.0;
+        // CORRECCIÓN DE SIGNO: Usamos Math.abs() para ignorar el negativo de Protheus
+        const totalProt = Math.abs(parseFloat(prot['TOTAL']) || 0.0);
+        const ivaProt = Math.abs(parseFloat(prot['IVA']) || 0.0);
 
-        const afipMatch = afipMap.get(uniqueId);
-
+        const afipMatch = afipMap.get(id);
         let estado = 'SOLO EN PROTHEUS';
         let afipData = { total: 0, iva: 0, fecha: '', emisor: '' };
 
         if (afipMatch) {
             estado = 'UNIDO';
             afipData = afipMatch;
-            afipMap.delete(uniqueId);
+            afipMap.delete(id);
         }
 
-        const difTotal = totalProt - afipData.total;
-        const difIva = ivaProt - afipData.iva;
+        // Calculamos diferencia (ahora ambos son positivos)
+        // Redondeamos a 2 decimales para evitar errores de coma flotante (0.00000001)
+        const difTotal = Number((totalProt - afipData.total).toFixed(2));
+        const difIva = Number((ivaProt - afipData.iva).toFixed(2));
 
-        comparisonMap.set(uniqueId, {
-            id: uniqueId,
-            estado: estado,
-            emisor: prot['DENOMINACION'] || afipData.emisor,
+        // Si la diferencia es minúscula (menor a 1 peso), asumimos que es 0
+        const esDiferenciaReal = Math.abs(difTotal) > 0.05 || Math.abs(difIva) > 0.05;
+
+        // Si están unidos pero hay diferencia real, cambiamos el estado para alertar
+        if (estado === 'UNIDO' && esDiferenciaReal) {
+            estado = 'DIFERENCIA IMPORTE';
+        }
+
+        comparisonMap.set(id, {
+            id, estado,
             cuit: cuit,
+            emisor: prot['DENOMINACION'] || afipData.emisor,
             fecha_prot: prot['FECHA'],
-            iva_prot: ivaProt,
-            total_prot: totalProt,
             fecha_afip: afipData.fecha,
+            iva_prot: ivaProt,
             iva_afip: afipData.iva,
-            total_afip: afipData.total,
             dif_iva: difIva,
+            total_prot: totalProt,
+            total_afip: afipData.total,
             dif_total: difTotal
         });
     });
 
-    console.log(`Registros Protheus leídos: ${protTotalCount}. Filtrados por mes: ${protFilteredCount}`);
-
-    // 4. CRUCE INVERSO
-    afipMap.forEach((afipData, uniqueId) => {
-        comparisonMap.set(uniqueId, {
-            id: uniqueId,
-            estado: 'SOLO EN AFIP',
-            emisor: afipData.emisor,
-            cuit: afipData.cuit,
-            fecha_prot: '',
-            iva_prot: 0,
-            total_prot: 0,
-            fecha_afip: afipData.fecha,
-            iva_afip: afipData.iva,
-            total_afip: afipData.total,
+    // 4. AGREGAR RESTO DE AFIP
+    afipMap.forEach((afipData, id) => {
+        comparisonMap.set(id, {
+            id, estado: 'SOLO EN AFIP',
+            cuit: afipData.cuit, emisor: afipData.emisor,
+            fecha_prot: '', fecha_afip: afipData.fecha,
+            iva_prot: 0, iva_afip: afipData.iva,
+            total_prot: 0, total_afip: afipData.total,
             dif_iva: 0 - afipData.iva,
             dif_total: 0 - afipData.total
         });
     });
 
-    // Retornamos los datos para procesar (ya sea CSV o API)
     return Array.from(comparisonMap.values());
 }
 
-/**
- * Verifica si una fecha pertenece al mes y año configurados.
- * Soporta formatos: 'YYYY-MM-DD' (AFIP) y 'DD/MM/YYYY' (Protheus)
- */
-// This function is now internal to generarReporte, so it's removed from global scope.
-
-/**
- * Función auxiliar para limpiar números de AFIP (formato europeo: 1.000,00)
- * Transforma "27.685,95" o "27685,95" -> 27685.95 (Float)
- */
-function parseAfipNumber(value) {
-    if (!value) return 0.0;
-    // Eliminar puntos de miles y reemplazar coma decimal por punto
-    const clean = value.toString().replace(/\./g, '').replace(',', '.');
-    return parseFloat(clean) || 0.0;
+// Helper numérico
+function parseNum(val) {
+    if (!val) return 0.0;
+    return parseFloat(val.toString().replace(/\./g, '').replace(',', '.')) || 0.0;
 }
 
-/**
- * Función auxiliar para parsear el XML de Excel 2003 (SpreadsheetML) de Protheus.
- * Extrae los datos de las celdas y maneja los índices vacíos.
- */
+// Helper XML (Igual que antes)
 async function parseProtheusXML(filePath) {
     const xmlContent = fs.readFileSync(filePath, 'utf-8');
     const parser = new xml2js.Parser();
-    const result = await parser.parseStringPromise(xmlContent);
+    const res = await parser.parseStringPromise(xmlContent);
+    const rows = res['Workbook']['Worksheet'][0]['Table'][0]['Row'];
 
-    // Navegar la estructura XML de Excel: Workbook -> Worksheet -> Table -> Row -> Cell -> Data
-    const worksheets = result['Workbook']['Worksheet'];
-    if (!worksheets) throw new Error('No se encontraron hojas de trabajo en el XML.');
-
-    let dataRows = [];
-    let headers = [];
-
-    // Iteramos sobre las filas de la primera hoja
-    const rows = worksheets[0]['Table'][0]['Row'];
-
-    // Buscamos la fila de cabecera
-    let headerIndex = -1;
-
-    // Convertimos la estructura compleja del XML a un array de arrays simple
-    const cleanRows = rows.map(row => {
-        const cells = row['Cell'];
-        if (!cells) return [];
-
+    // Buscar cabecera
+    let headIdx = -1, headers = [];
+    const matrix = rows.map(r => {
+        if (!r['Cell']) return [];
         let rowData = [];
-        cells.forEach(cell => {
-            // Manejar atributo ss:Index (Excel salta celdas vacías)
-            let cellIndex = 0;
-            if (cell['$'] && cell['$']['ss:Index']) {
-                cellIndex = parseInt(cell['$']['ss:Index']) - 1;
-            } else {
-                cellIndex = rowData.length;
-            }
-
-            // Rellenar huecos si saltó índices
-            while (rowData.length < cellIndex) {
-                rowData.push('');
-            }
-
-            // Extraer el valor (Data)
-            let cellValue = '';
-            if (cell['Data'] && cell['Data'][0] && cell['Data'][0]['_']) {
-                cellValue = cell['Data'][0]['_'];
-            } else if (cell['Data'] && typeof cell['Data'][0] === 'string') {
-                cellValue = cell['Data'][0];
-            }
-            rowData.push(cellValue);
+        r['Cell'].forEach(c => {
+            let idx = c['$'] && c['$']['ss:Index'] ? parseInt(c['$']['ss:Index']) - 1 : rowData.length;
+            while (rowData.length < idx) rowData.push('');
+            let val = '';
+            if (c['Data']) val = c['Data'][0]['_'] || c['Data'][0];
+            rowData.push(val);
         });
         return rowData;
     });
 
-    // Identificar cabecera
-    for (let i = 0; i < cleanRows.length; i++) {
-        if (cleanRows[i].includes('CODIGO') && cleanRows[i].includes('DENOMINACION')) {
-            headers = cleanRows[i];
-            headerIndex = i;
-            break;
+    for (let i = 0; i < matrix.length; i++) {
+        if (matrix[i].includes('CODIGO') && matrix[i].includes('DENOMINACION')) {
+            headIdx = i; headers = matrix[i]; break;
         }
     }
+    if (headIdx === -1) throw new Error("No hay cabecera en XML");
 
-    if (headerIndex === -1) throw new Error('No se encontró la cabecera en el archivo Protheus.');
-
-    // Convertir filas a objetos basados en la cabecera
-    for (let i = headerIndex + 1; i < cleanRows.length; i++) {
-        const rowArray = cleanRows[i];
-        if (rowArray.length === 0) continue;
-
-        let rowObj = {};
-        headers.forEach((header, index) => {
-            rowObj[header] = rowArray[index] || '';
-        });
-        dataRows.push(rowObj);
-    }
-
-    return dataRows;
-}
-
-/**
- * Función Principal de Ejecución (Legacy CSV Mode)
- */
-async function main() {
-    // Usamos los valores globales por defecto
-    const data = await generarReporte(MES_FILTRO, ANIO_FILTRO);
-
-    // 5. GENERAR CSV GENERAL
-    const cabecera = [
-        'ID_UNICO', 'ESTADO_CRUCE', 'CUIT', 'EMISOR',
-        'FECHA_PROTHEUS', 'FECHA_AFIP',
-        'IVA_PROTHEUS', 'IVA_AFIP', 'DIFERENCIA_IVA',
-        'TOTAL_PROTHEUS', 'TOTAL_AFIP', 'DIFERENCIA_TOTAL'
-    ];
-
-    const filasCsvGeneral = [cabecera.join(';')];
-    const filasCsvDiferencias = [cabecera.join(';')];
-
-    let contDiferencias = 0;
-
-    for (const item of data) {
-        const fila = [
-            item.id,
-            item.estado,
-            item.cuit,
-            `"${item.emisor}"`,
-            item.fecha_prot,
-            item.fecha_afip,
-            item.iva_prot.toFixed(2).replace('.', ','),
-            item.iva_afip.toFixed(2).replace('.', ','),
-            item.dif_iva.toFixed(2).replace('.', ','),
-            item.total_prot.toFixed(2).replace('.', ','),
-            item.total_afip.toFixed(2).replace('.', ','),
-            item.dif_total.toFixed(2).replace('.', ',')
-        ];
-
-        const lineaCsv = fila.join(';');
-        filasCsvGeneral.push(lineaCsv);
-
-        if (item.estado !== 'UNIDO') {
-            filasCsvDiferencias.push(lineaCsv);
-            contDiferencias++;
-        }
-    }
-
-    fs.writeFileSync(FILE_OUTPUT_GENERAL, filasCsvGeneral.join('\n'), { encoding: 'utf-8' });
-    fs.writeFileSync(FILE_OUTPUT_DIFERENCIAS, filasCsvDiferencias.join('\n'), { encoding: 'utf-8' });
-
-    console.log('\n--- RESULTADOS ---');
-    console.log(`Archivo Completo generado: ${FILE_OUTPUT_GENERAL} (${data.length} registros)`);
-    console.log(`Archivo Diferencias generado: ${FILE_OUTPUT_DIFERENCIAS} (${contDiferencias} registros sin cruzar)`);
-}
-
-// Exportamos la función para usar en el servidor
-module.exports = { generarReporte };
-
-// Si se ejecuta directamente, corremos main()
-if (require.main === module) {
-    main().catch(error => {
-        console.error('Ocurrió un error fatal:', error);
+    return matrix.slice(headIdx + 1).map(row => {
+        let obj = {};
+        headers.forEach((h, i) => obj[h] = row[i] || '');
+        return obj;
     });
 }
+
+// Ejecución directa (Genera CSVs)
+async function main() {
+    const data = await generarReporte(MES_FILTRO, ANIO_FILTRO);
+
+    // Filtrar solo las diferencias reales para el archivo de errores
+    const diferencias = data.filter(d => d.estado !== 'UNIDO');
+
+    const toCSV = (arr) => {
+        if (!arr.length) return '';
+        const head = ['ID', 'ESTADO', 'CUIT', 'EMISOR', 'FECHA_PROTHEUS', 'FECHA_AFIP', 'IVA_PROT', 'IVA_AFIP', 'DIF_IVA', 'TOTAL_PROT', 'TOTAL_AFIP', 'DIF_TOTAL'];
+        const rows = arr.map(i => [
+            i.id, i.estado, i.cuit, `"${i.emisor}"`,
+            i.fecha_prot, i.fecha_afip,
+            i.iva_prot.toFixed(2).replace('.', ','), i.iva_afip.toFixed(2).replace('.', ','), i.dif_iva.toFixed(2).replace('.', ','),
+            i.total_prot.toFixed(2).replace('.', ','), i.total_afip.toFixed(2).replace('.', ','), i.dif_total.toFixed(2).replace('.', ',')
+        ].join(';'));
+        return [head.join(';'), ...rows].join('\n');
+    };
+
+    fs.writeFileSync(FILE_OUTPUT_GENERAL, toCSV(data));
+    fs.writeFileSync(FILE_OUTPUT_DIFERENCIAS, toCSV(diferencias));
+
+    console.log(`\n LISTO: ${data.length} total. ${diferencias.length} diferencias.`);
+    console.log(` Archivos: ${FILE_OUTPUT_GENERAL} y ${FILE_OUTPUT_DIFERENCIAS}`);
+}
+
+module.exports = { generarReporte };
+if (require.main === module) main();
