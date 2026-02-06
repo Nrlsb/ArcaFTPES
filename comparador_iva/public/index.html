@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conciliador de IVA | Protheus vs AFIP</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Header -->
+        <header class="main-header">
+            <div class="logo-area">
+                <span class="material-icons-round logo-icon">analytics</span>
+                <h1>Conciliador IVA</h1>
+            </div>
+
+            <div class="controls-area">
+                <div class="control-group">
+                    <label for="mes">Mes</label>
+                    <select id="mes">
+                        <option value="1">Enero</option>
+                        <option value="2">Febrero</option>
+                        <option value="3">Marzo</option>
+                        <option value="4">Abril</option>
+                        <option value="5">Mayo</option>
+                        <option value="6">Junio</option>
+                        <option value="7">Julio</option>
+                        <option value="8">Agosto</option>
+                        <option value="9">Septiembre</option>
+                        <option value="10">Octubre</option>
+                        <option value="11" selected>Noviembre</option>
+                        <option value="12">Diciembre</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label for="anio">Año</label>
+                    <input type="number" id="anio" value="2025" min="2020" max="2030">
+                </div>
+
+                <div class="control-group">
+                    <button id="btn-actualizar" class="primary-btn">
+                        <span class="material-icons-round">refresh</span>
+                        Analizar
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="content-area">
+            <!-- Stats Cards -->
+            <div class="stats-grid">
+                <div class="card stat-card">
+                    <span class="label">Total Facturas</span>
+                    <strong class="value" id="stat-total">0</strong>
+                </div>
+                <div class="card stat-card warning">
+                    <span class="label">Discrepancias</span>
+                    <strong class="value" id="stat-diff">0</strong>
+                </div>
+                <div class="card stat-card success">
+                    <span class="label">Coincidencias</span>
+                    <strong class="value" id="stat-match">0</strong>
+                </div>
+            </div>
+
+            <!-- Table Section -->
+            <div class="card table-card">
+                <div class="table-header">
+                    <h2>Resultados Detallados</h2>
+                    <div class="table-actions">
+                        <div class="search-box">
+                            <span class="material-icons-round">search</span>
+                            <input type="text" id="busqueda" placeholder="Buscar por CUIT, Emisor...">
+                        </div>
+                        <div class="filter-toggle">
+                            <input type="checkbox" id="solo-diferencias">
+                            <label for="solo-diferencias">Ver Solo Diferencias</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <table id="resultados-tabla">
+                        <thead>
+                            <tr>
+                                <th>Estado</th>
+                                <th>Emisor</th>
+                                <th>CUIT</th>
+                                <th>Fecha AFIP</th>
+                                <th class="text-right">IVA AFIP</th>
+                                <th class="text-right">IVA Protheus</th>
+                                <th class="text-right">Diferencia</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Rows will be injected here -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="loading-overlay hidden" id="loading">
+                    <div class="spinner"></div>
+                    <p>Procesando datos...</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

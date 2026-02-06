@@ -1,0 +1,337 @@
+:root {
+    --bg-body: #0f172a;
+    --bg-card: #1e293b;
+    --bg-hover: #334155;
+    --primary: #3b82f6;
+    --primary-hover: #2563eb;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+    --border: #334155;
+
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+
+    --font-family: 'Inter', sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--bg-body);
+    color: var(--text-main);
+    line-height: 1.5;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+/* Header */
+.main-header {
+    background-color: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 1rem 2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    z-index: 10;
+}
+
+.logo-area {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.logo-icon {
+    font-size: 2rem;
+    color: var(--primary);
+}
+
+.logo-area h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.controls-area {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-end;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.control-group label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+select,
+input[type="number"],
+input[type="text"] {
+    background-color: var(--bg-body);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    font-family: var(--font-family);
+    font-size: 0.875rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+select:focus,
+input:focus {
+    border-color: var(--primary);
+}
+
+/* Button */
+.primary-btn {
+    background-color: var(--primary);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: background 0.2s, transform 0.1s;
+}
+
+.primary-btn:hover {
+    background-color: var(--primary-hover);
+}
+
+.primary-btn:active {
+    transform: translateY(1px);
+}
+
+/* Main Content */
+.content-area {
+    flex: 1;
+    padding: 2rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+/* Stats Logic */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+}
+
+.card {
+    background-color: var(--bg-card);
+    border-radius: 1rem;
+    border: 1px solid var(--border);
+    padding: 1.5rem;
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+}
+
+.stat-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.stat-card .label {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.stat-card .value {
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.stat-card.warning .value {
+    color: var(--warning);
+}
+
+.stat-card.success .value {
+    color: var(--success);
+}
+
+/* Table Section */
+.table-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+    padding: 0;
+    /* Custom padding for table layout */
+}
+
+.table-header {
+    padding: 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.table-header h2 {
+    font-size: 1.125rem;
+    font-weight: 600;
+}
+
+.table-actions {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.search-box {
+    position: relative;
+}
+
+.search-box span {
+    position: absolute;
+    left: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 1.25rem;
+}
+
+.search-box input {
+    padding-left: 2.5rem;
+    min-width: 250px;
+}
+
+.filter-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    user-select: none;
+}
+
+.filter-toggle label {
+    cursor: pointer;
+    font-size: 0.875rem;
+}
+
+/* Table */
+.table-container {
+    flex: 1;
+    overflow: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+th {
+    background-color: #1a2234;
+    /* Slightly darker than card */
+    position: sticky;
+    top: 0;
+    text-align: left;
+    padding: 1rem 1.5rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+}
+
+td {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-main);
+}
+
+tr:hover td {
+    background-color: var(--bg-hover);
+}
+
+.text-right {
+    text-align: right;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Status Badges */
+.status-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    display: inline-block;
+}
+
+.status-unido {
+    background-color: rgba(16, 185, 129, 0.2);
+    color: var(--success);
+}
+
+.status-error {
+    background-color: rgba(245, 158, 11, 0.2);
+    color: var(--warning);
+}
+
+.status-only-afip {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: var(--danger);
+}
+
+.currency {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Loading */
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(15, 23, 42, 0.8);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    z-index: 50;
+    backdrop-filter: blur(4px);
+}
+
+.spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    border-top-color: var(--primary);
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
