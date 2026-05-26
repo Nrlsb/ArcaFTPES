@@ -35,3 +35,14 @@ dist
 *.njsproj
 *.sln
 *.sw?
+
+# Next.js build output
+.next/
+out/
+
+# Data files (local spreadsheets, XML, text logs)
+*.csv
+*.xlsx
+*.xml
+*.txt
+*.log
